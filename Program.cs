@@ -1,13 +1,120 @@
 using System;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Linq;
 
 using System.Text.Json.Serialization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 
 namespace MyWebApp;
+
+public class Person
+{
+    public string Name { get; set; } = "none";
+    public string Id { get; set; } = "none";
+    public int Age { get; set; }
+}
+
+public class MyComponent<T> where T : Person 
+{
+
+    public List<T> Users { get; private set; }
+    public static readonly string expressionGuid = @"^/api/users/\w{8}-\w{4}-\w{4}-\w{4}-\w{12}$";
+
+    public MyComponent(List<T> list) => Users = list;
+
+    public async Task GetAllUsers(HttpResponse response)
+    {
+        await response.WriteAsJsonAsync(Users);
+    }
+
+    public async Task GetUser(string? id, HttpContext context)
+    {
+        Person? person = Users.FirstOrDefault((x) => x.Id == id);
+        if(person != null)
+        {
+            await context.Response.WriteAsJsonAsync(person);
+        }
+        else
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsJsonAsync(new { message = "User not found"});
+        }
+    }
+
+    public async Task UpdateUser(HttpContext context)
+    {
+        try
+        {
+            Person? person = await context.Request.ReadFromJsonAsync<Person>();
+            if(person != null)
+            {
+                var user = Users.FirstOrDefault(u => u.Id == person.Id);
+                if(user != null)
+                {
+                    user.Age = person.Age;
+                    user.Name = person.Name;
+                    await context.Response.WriteAsJsonAsync(user);
+                }
+                else
+                {
+                    context.Response.StatusCode = 404;
+                    await context.Response.WriteAsJsonAsync(new { message = "User not found" });
+                }
+            }
+            else
+            {
+                throw new Exception("Uncorrect Data");
+            }
+
+        }
+        catch (Exception)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new {message = "Uncorrect Data"});
+        }
+    }
+
+    public async Task DeleteUser(string? id, HttpContext context)
+    {
+        Person? person = Users.Find(u => u.Id == id);
+        if(person != null)
+        {
+            Users.Remove((T)person);
+            await context.Response.WriteAsJsonAsync(person);
+        }
+        else
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsJsonAsync(new { message = "User not found" });
+        }
+    }
+
+    public async Task CreateUser(HttpContext context)
+    {
+        try
+        {
+            Person? person = await context.Request.ReadFromJsonAsync<Person>();
+            if (person != null)
+            {
+                person.Id = Guid.NewGuid().ToString();
+                Users.Add((T)person);
+
+                await context.Response.WriteAsJsonAsync(person);
+            }
+            else throw new Exception("Uncorrect Data");
+        }
+        catch (Exception)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new {message = "Uncorrect Data" });
+        }
+    }
+}
 
 public class Program
 {
@@ -16,91 +123,63 @@ public class Program
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args });
         WebApplication app = builder.Build();
 
-        app.Run(MyComponent);
+        var component = new MyComponent<Person>(new List<Person> 
+        {
+            new Person { Name = "Mike", Age = 18, Id = Guid.NewGuid().ToString() },
+            new Person { Name = "Jeremy", Age = 36, Id = Guid.NewGuid().ToString() },
+            new Person { Name = "Kate", Age = 47, Id = Guid.NewGuid().ToString() },
+        });
+
+        app.Run(new RequestDelegate(Handler(component)));
         await app.RunAsync();
     }
 
-    public record Person(string Name, int Age);
-
-    public async static Task MyComponent(HttpContext context)
+    public static Func<HttpContext, Task> Handler<T> (MyComponent<T> component) where T : Person
     {
-        var (response, request) = (context.Response, context.Request);
-        if(request.Path == "/api/user")
+        return async delegate(HttpContext context)
         {
-            var text = "Data Error";
-            if (request.HasJsonContentType())
-            {
-                var options = new JsonSerializerOptions();
-                options.Converters.Add(new MyConverter());
+            var (request, response) = (context.Request, context.Response);
+            string? id = null;
 
-                var person = await request.ReadFromJsonAsync<Person>(options);
-                if (person != null) text = $"Name: {person.Name}\tAge: {person.Age}";
+            foreach(var i in component.Users)
+            {
+                Console.WriteLine($"{i.Name}\t{ i.Age }\t{i.Id}");
             }
+            Console.WriteLine();
 
-            await response.WriteAsJsonAsync(new {Text = text});
-        }
-        else
-        {
-            response.ContentType = "text/html; charset=utf-8";
-            await response.SendFileAsync("html/index.html");
-        }
-
-    }
-
-}
-
-public class MyConverter : JsonConverter<Program.Person>
-{
-    public override Program.Person? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        (string personName, int personAge) = ("None", 0);
-
-        while (reader.Read())
-        {
-            if(reader.TokenType == JsonTokenType.PropertyName)
+            switch (request.Method)
             {
-                var property = reader.GetString();
-                reader.Read();
 
-                switch (property)
-                {
-                    case "Age" or "age" when reader.TokenType == JsonTokenType.Number:
+            case "GET" when request.Path == "/api/users":
+                await component.GetAllUsers(response);
+                break;
 
-                        personAge = reader.GetInt32();
+            case "GET" when Regex.IsMatch(request.Path, MyComponent<T>.expressionGuid):
+                id = request.Path.Value?.Split('/')[3];
+                await component.GetUser(id, context);
+                break;
 
-                        break;
+            case "POST" when request.Path == "/api/users":
+                await component.CreateUser(context);
+                break;
 
-                    case "Age" or "age" when reader.TokenType == JsonTokenType.String:
+            case "PUT" when request.Path == "/api/users":
+                await component.UpdateUser(context);
+                break;
 
-                        string? stringValue = reader.GetString();
-                        // пытаемся конвертировать строку в число
-                        if (int.TryParse(stringValue, out int value))
-                        {
-                            personAge = value;
-                        }
+            case "DELETE" when Regex.IsMatch(request.Path, MyComponent<T>.expressionGuid):                
+                id = request.Path.Value?.Split('/')[3];
+                await component.DeleteUser(id, context);
+                break;
 
-                        break;
+            default:
+                response.ContentType = "text/html; charset=utf-8";
+                await response.SendFileAsync("html/index.html");
+                break;
 
-                    case "Name" or "name":
-
-                        personName = reader.GetString() ?? personName;
-
-                        break;
-
-                    default: break;
-                }
-
-            };
-        }
-
-        return new Program.Person(Name: personName, Age: personAge);
+            }
+        };
+        
     }
 
-    public override void Write(Utf8JsonWriter writer, Program.Person value, JsonSerializerOptions options)
-    {
-        writer.WriteStartObject();
-        writer.WriteString("name", value.Name);
-        writer.WriteNumber("age", value.Age);
-        writer.WriteEndObject();
-    }
 }
