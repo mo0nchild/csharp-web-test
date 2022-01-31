@@ -7,8 +7,4 @@
     <RootNamespace>Web_test</RootNamespace>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Folder Include="upload\" />
-  </ItemGroup>
-
 </Project>

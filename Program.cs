@@ -15,71 +15,63 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Debug;
+using System.Linq;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging.Console;
 
 namespace MyWebApp;
-
-public static class FileLoggerExtension
-{
-    public static ILoggingBuilder AddFileLogger(this ILoggingBuilder builder, string filepath)
-    {
-        builder.AddProvider(new FileLoggerProvider(filepath));
-        return builder;
-    }
-}
-
-class FileLoggerProvider : ILoggerProvider
-{
-    string file;
-
-    public FileLoggerProvider(string file)
-    {
-        this.file = file;
-    }
-
-    public ILogger CreateLogger(string categoryName)
-    {
-        return new FileLogger(file);
-    }
-
-    public void Dispose() { }
-}
-
-class FileLogger : ILogger, IDisposable
-{
-    string filepath;
-    object _lock = new();
-    public FileLogger(string filepath)
-    {
-        this.filepath = filepath;
-    }
-
-    public IDisposable BeginScope<TState>(TState state) => this;
-    public void Dispose() { }
-    public bool IsEnabled(LogLevel logLevel) => true;
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-    {
-        lock (_lock)
-        {
-            File.AppendAllText(filepath, formatter(state, exception) + Environment.NewLine);
-        }
-    }
-}
 
 public class Program
 {
     public static async Task Main(string[] args)
     { 
         var builder = WebApplication.CreateBuilder(args);
-        builder?.Logging.AddFileLogger(Path.Combine(Directory.GetCurrentDirectory(), "logging.txt"));
-
-        WebApplication? app = builder?.Build();
-        if (app == null) throw new Exception("Can't build application");
-
-        app.Map("/", async (HttpContext req, ILogger<FileLoggerProvider> log) => 
+        builder.Services.AddDistributedMemoryCache();
+        builder.Services.AddSession(options =>
         {
-            log.LogInformation("Hello");
-            await req.Response.WriteAsync("Home");
+            options.Cookie.Name = ".MyApp.Session";
+            options.IdleTimeout = TimeSpan.FromSeconds(1000);
+            options.Cookie.IsEssential = true;
+        });
+
+        WebApplication app = builder.Build();
+
+        app.UseSession();
+        app.UseRouting();
+        app.UseEndpoints(endpoints =>
+        {
+            endpoints.MapGet("/", async (context) =>
+            {
+                var env = context.RequestServices.GetService<IWebHostEnvironment>();
+                context.Response.ContentType = "text/html; charset=utf-8";
+                await context.Response.SendFileAsync(Path.Combine(env?.WebRootPath ?? "", "index.html"));
+            });
+            endpoints.MapPost("/login", async (context) =>
+            {
+                if(context.Request.Form.TryGetValue("login", out var login) &&
+                    context.Request.Form.TryGetValue("password", out var password))
+                {
+                    await context.Response.WriteAsync($"Ok");
+                    context.Session.SetString("auth", $"{login}/{password}");
+                }
+                else
+                {
+                    context.Response.StatusCode = 404;
+                    await context.Response.WriteAsync("Failed");
+                }
+            });
+            endpoints.MapGet("/check", async (context) =>
+            {
+                if (context.Session.IsAvailable)
+                {
+                    var auth = context.Session.GetString("auth");
+                    await context.Response.WriteAsync($"auth: {auth}\nlogin: {auth?.Split('/')[0]}\npassword: {auth?.Split('/')[1]}");
+                }
+                else
+                {
+                    await context.Response.WriteAsync("Session Closed");
+                }
+            });
         });
 
         await app.RunAsync();
