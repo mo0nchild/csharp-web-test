@@ -1,0 +1,16 @@
+﻿@using MyWebApp.Models;
+@using MyWebApp;
+@using Microsoft.AspNetCore;
+
+@model User;
+
+@{
+	
+}
+
+<h1>@Model.Name</h1>
+<a href="/pre">change</a>
+
+<component>@(await Html.RenderComponentAsync<Counter>(RenderMode.ServerPrerendered))</component>
+
+
